@@ -1,0 +1,32 @@
+cmake_minimum_required(VERSION 3.0.0)
+project(sinffer VERSION 0.1.0)
+
+add_definitions(-DMODULE_FFMPEG)
+find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
+find_library(AVCODEC_LIBRARY avcodec)
+find_path(AVFORMAT_INCLUDE_DIR libavformat/avformat.h)
+find_library(AVFORMAT_LIBRARY avformat)
+find_path(AVUTIL_INCLUDE_DIR libavutil/avutil.h)
+find_library(AVUTIL_LIBRARY avutil)
+find_path(AVDEVICE_INCLUDE_DIR libavdevice/avdevice.h)
+find_library(AVDEVICE_LIBRARY avdevice)
+find_path(AVFILTER_INCLUDE_DIR libavfilter/avfilter.h)
+find_library(AVFILTER_LIBRARY avfilter)
+find_path(SWSCALE_INCLUDE_DIR libswscale/swscale.h)
+find_library(SWSCALE_LIBRARY swscale)
+set(AV_Tool_LIB ${AVCODEC_LIBRARY} ${AVFORMAT_LIBRARY} ${AVUTIL_LIBRARY} ${AVDEVICE_LIBRARY} ${AVFILTER_LIBRARY} ${SWSCALE_LIBRARY})
+set(INC_DIRS ${AVCODEC_INCLUDE_DIR} ${AVFORMAT_INCLUDE_DIR} ${AVUTIL_INCLUDE_DIR} ${AVDEVICE_INCLUDE_DIR} ${AVFILTER_INCLUDE_DIR} ${SWSCALE_INCLUDE_DIR})
+include_directories(${INC_DIRS})
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/SRC/_Thirdparty/FFMPEG/ FFMPEG)
+
+find_package(OpenCV REQUIRED)
+include_directories(${OpenCV_INCLUDE_DIRS})
+
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
+find_package(Threads REQUIRED)
+
+add_executable(sinffer main.cpp)
+target_link_libraries(sinffer ${AV_Tool_LIB})
+target_link_libraries(sinffer ${OpenCV_LIBS})
+target_link_libraries(sinffer Threads::Threads)
