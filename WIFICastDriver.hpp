@@ -1,4 +1,3 @@
-
 #pragma once
 #include <tuple>
 #include <vector>
@@ -6,11 +5,16 @@
 #include <condition_variable>
 #include "Drive_Socket.hpp"
 #include "FlowController.hpp"
+#include <cstring>
+
+#include <iomanip>
+
 #define FrameTypeL 58
+#define FrameLLCMark 59
 #define VideoTrans 0x68
 #define DataETrans 0x69
 #define FeedBackTrans 0x77
-#define SocketMTU 1490 - 5 //FCS auto add by driver or kerenl
+#define SocketMTU 1490 - 5 // FCS auto add by driver or kerenl
 #define HeaderSize 61
 #define SocketMTUMAX 1500
 #define LOSEMAXPRE 100
@@ -25,12 +29,40 @@
 #define DATA_LOSE 7
 #define DATA_LOSEPRE 8
 
+#define CAST32(x) reinterpret_cast<uint32_t *>(x)[0]
+
 namespace WIFIBroadCast
 {
     enum BroadCastType
     {
         VideoStream,
         DataStream,
+    };
+
+    struct VideoPacketsInfo
+    {
+        uint8_t header[HeaderSize];
+        uint8_t frameID;
+        uint8_t maxVideosize[4]; // get uint32_t data by CAST32(maxVideosize)
+        uint16_t width;
+        uint16_t height;
+        uint8_t dataEnd;
+        uint8_t scrc32[4];
+    };
+
+    struct VideoPacketsSetter
+    {
+        VideoPacketsInfo info;
+        uint32_t dataLose;
+        uint32_t currentFrameSeq;
+        uint32_t currentDataSize;
+    };
+
+    struct VideoPackets
+    {
+        VideoPacketsSetter vps;
+        int videoRawSize;
+        std::shared_ptr<uint8_t> videoDataRaw;
     };
 
     class WIFICastDriver
@@ -43,14 +75,10 @@ namespace WIFIBroadCast
 
         void WIFICastInject(uint8_t *data, int size, int InterfaceID, BroadCastType type, int delayUS, uint8_t FrameQueueID);
 
-        void WIFICastInjectMulti(uint8_t *data, int size, int delayUS){};
-        void WIFICastInjectMultiBL(uint8_t *data, int size, int delayUS){};
+        void WIFICastInjectMulti(uint8_t *data, int size, int delayUS) {};
+        void WIFICastInjectMultiBL(uint8_t *data, int size, int delayUS) {};
         //
-        void WIFIRecvSinff();
-        int WIFIRecvVideoSeq() { return VideoFullPackets.size(); }
-        std::tuple<unsigned char *, int *, bool> WIFIRecvVideoDMA(int ID) { return VideoFullPackets[ID]; };
-
-        void WIFIRecvWaitFrame();
+        void WIFIRecvSinff(std::function<void(VideoPackets *)> vcallback);
 
     private:
         struct InjectPacketLLCInfo
@@ -80,10 +108,6 @@ namespace WIFIBroadCast
                 0x00, 0x00, 0x00, 0x00, DataETrans, 0xff, 0xff};
         } InjectPacketLLC;
 
-        bool IsFrameGet = false;
-        std::mutex copylock;
-        std::condition_variable notifyWait;
-
         int InterfaceCount = 0;
         uint8_t FrameCounter68 = 0;
         uint8_t FrameCounter69 = 0;
@@ -91,9 +115,10 @@ namespace WIFIBroadCast
         uint8_t **PacketDatae;
         std::vector<sock_filter> RecvFilter;
         std::vector<std::unique_ptr<Socket>> SocketInjectors;
-
         std::unique_ptr<FlowThread> RecvThread;
-        std::vector<std::tuple<unsigned char *, int *, bool>> VideoFullPackets;
+        std::vector<VideoPackets> VideoPacketsBuffer;
+
+        std::function<void(VideoPackets *)> videoCallBack;
     };
 }
 
@@ -226,115 +251,119 @@ void WIFIBroadCast::WIFICastDriver::WIFICastInject(uint8_t *data, int len, int I
     }
 }
 
-void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff()
+void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPackets *)> vcallback)
 {
+    videoCallBack = vcallback;
+
     RecvThread.reset(new FlowThread(
         [&]()
         {
             uint8_t dataTmp[SocketMTUMAX] = {0x00};
             SocketInjectors[0]->Sniff(dataTmp, SocketMTUMAX);
+
+            // for (size_t i = 0; i < SocketMTUMAX; i++)
+            // {
+            //     if (dataTmp[i] == 0 && dataTmp[i + 1] == 0 &&
+            //         dataTmp[i + 2] == 0 && dataTmp[i + 3] == 1)
+            //     {
+            //         std::cout << "offset: " << std::setw(7) << std::setfill(' ') << i << " -> ";
+            //         std::cout << "header: " << std::hex << "0x" << (int)dataTmp[i + 4] << std::dec << " <--> ";
+            //     }
+            // }
+            // std::cout << "\n";
+            // FIXME: must locate every frame one by one
             // From data HeaderSize:
             int size = dataTmp[FrameTypeL - 1];
             size |= dataTmp[FrameTypeL - 2] << 8;
-
+            // FIXME: must deal with data team together
             int FramestreamID = (dataTmp[size - 1] >> 4);
             int Framesequeue = (dataTmp[size - 1] - (FramestreamID << 4));
-            //
+
             int LocateID = -1;
             bool PacketNotReg = true;
-            for (size_t i = 0; i < VideoFullPackets.size(); i++)
-                if (std::get<int *>(VideoFullPackets[i])[DATA_STREAMID] == FramestreamID || std::get<int *>(VideoFullPackets[i])[DATA_STREAMID] == dataTmp[HeaderSize])
+            // check pack is regsitered and match what we want
+            VideoPackets *videoTarget;
+            for (size_t i = 0; i < VideoPacketsBuffer.size(); i++)
+                if (VideoPacketsBuffer[i].vps.info.frameID == FramestreamID)
                 {
                     LocateID = i;
                     PacketNotReg = false;
+                    videoTarget = &VideoPacketsBuffer[LocateID];
                 }
             //
-            if (dataTmp[FrameTypeL] == VideoTrans && !PacketNotReg)
+            if (dataTmp[FrameTypeL] == VideoTrans && !PacketNotReg && videoTarget)
             {
-                //Step 1: locate 0xf signal for the frame start
-                if (Framesequeue == 0xf)
+                if (videoTarget->vps.currentDataSize <=
+                    CAST32(videoTarget->vps.info.maxVideosize))
                 {
-                    if (!std::get<bool>(VideoFullPackets[LocateID]))
+                    // JUST COPY IT, I dont't care
+                    std::copy((dataTmp + HeaderSize),
+                              (dataTmp + size),
+                              videoTarget->videoDataRaw.get() + videoTarget->vps.currentDataSize);
+                    videoTarget->vps.currentDataSize += (size - HeaderSize - 1);
+
+                    if (Framesequeue == 0xf) // end packet
                     {
-                        //Step 2: if frame is not located before , set frame size 0 and start recving
-                        std::get<bool>(VideoFullPackets[LocateID]) = true;
-                        std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] = 0;
+                        videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
+                        videoCallBack(videoTarget);
+                        // TODO: add a signal to notify data is ready
+                        // FIXME: Direct to wait next frame?
+                        videoTarget->vps.currentDataSize = 0;
+                        std::memset(videoTarget->videoDataRaw.get(), 0, videoTarget->videoRawSize);
                     }
-                    else
+                    else // continue packet
                     {
-                        //Step 4: finsh a frame transision.
-                        if ((std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] + (size - HeaderSize - 1)) <= std::get<int *>(VideoFullPackets[LocateID])[DATA_SIZEMAX])
+                        if (!(Framesequeue == videoTarget->vps.currentFrameSeq + 1 ||
+                              (videoTarget->vps.currentFrameSeq == 0xe && Framesequeue == 0x0)))
                         {
-                            std::get<bool>(VideoFullPackets[LocateID]) = false;
-                            // copy data to buffer before add tmp size
-                            std::copy(dataTmp + HeaderSize, dataTmp + size - 1, std::get<unsigned char *>(VideoFullPackets[LocateID]) + std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE]);
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] += (size - HeaderSize - 1);
-                            // Pop out the frame with resize SIZENOW
-                            // TODO: add a signal to notify data is ready
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_SIZENOW] = std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE];
-                            //
-                            std::unique_lock<std::mutex> lockWaitMain{copylock};
-                            IsFrameGet = true;
-                            notifyWait.notify_all();
-                            // FIXME: Direct to wait next frame?
-                            std::get<bool>(VideoFullPackets[LocateID]) = true;
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] = 0;
+                            // Throw frame if lose
+                            // FIXME: should not throw
+                            goto framereset;
                         }
-                        else
-                        {
-                            std::get<bool>(VideoFullPackets[LocateID]) = false;
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] = 0;
-                        }
+                        videoTarget->vps.currentFrameSeq = Framesequeue;
                     }
                 }
-                else if (std::get<bool>(VideoFullPackets[LocateID]))
+                else
                 {
-                    //Step 3: check size and copy single frame data
-                    if ((std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] + (size - HeaderSize - 1)) <= std::get<int *>(VideoFullPackets[LocateID])[DATA_SIZEMAX])
-                    {
-                        // copy data to buffer before add tmp size
-                        std::copy((dataTmp + HeaderSize), (dataTmp + size - 1), (std::get<unsigned char *>(VideoFullPackets[LocateID]) + std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE]));
-                        std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] += (size - HeaderSize - 1);
-                        // check Frame sequeue is correct
-                        // TODO: deal with frame is disconnect
-                        if (Framesequeue == (std::get<int *>(VideoFullPackets[LocateID])[DATA_FRAMESEQ] + 1) || (std::get<int *>(VideoFullPackets[LocateID])[DATA_FRAMESEQ] == 0xe && Framesequeue == 0x0))
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_FRAMESEQ] = Framesequeue;
-                        else
-                        {
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_LOSE]++;
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_FRAMESEQ] = Framesequeue;
-                            //Throw frame if lose
-                            //FIXME: should not throw
-                            std::get<bool>(VideoFullPackets[LocateID]) = false;
-                            std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] = 0;
-                        }
-                    }
-                    else
-                    {
-                        std::get<bool>(VideoFullPackets[LocateID]) = false;
-                        std::get<int *>(VideoFullPackets[LocateID])[DATA_TMPSIZE] = 0;
-                    }
+                    goto framereset;
                 }
             }
             else if (dataTmp[FrameTypeL] == DataETrans)
             {
-                //TODO: Get max video size , width and height from DataEFrame. also reattch ebpf with mac bind.
-                // 1 btye: FrameID, 4 byte: Max size, 2 btye: width, 2 byte: height
-                if (dataTmp[size - 1] == 0xff)
+                // TODO: Get max video size , width and height from DataEFrame. also reattch ebpf with mac bind.
+                if (PacketNotReg == true)
                 {
-                    if (PacketNotReg)
+                    if (dataTmp[size - 1] == 0xff)
                     {
-                        int FrameID = dataTmp[HeaderSize];
-                        int ssize = (dataTmp[HeaderSize + 1] << 24) | (dataTmp[HeaderSize + 2] << 16) | (dataTmp[HeaderSize + 3] << 8) | (dataTmp[HeaderSize + 4]);
-                        int width = dataTmp[HeaderSize + 5] << 8 | dataTmp[HeaderSize + 6];
-                        int height = dataTmp[HeaderSize + 7] << 8 | dataTmp[HeaderSize + 8];
-                        if (ssize > 0)
+
+                        VideoPacketsInfo packetInfo;
+                        std::copy(dataTmp, dataTmp + sizeof(VideoPacketsInfo), (uint8_t *)&packetInfo);
+                        //
+                        if ((int)packetInfo.frameID >= VideoPacketsBuffer.size())
                         {
-                            int FrameInfo[] = {FrameID, ssize, width, height, 0, 0, ssize, 0, 0};
-                            VideoFullPackets.push_back(std::make_tuple(new unsigned char[ssize], FrameInfo, false));
+                            std::cout << "DataFrameInfo: "
+                                      << (int)packetInfo.frameID << " "
+                                      << (int)packetInfo.width << " "
+                                      << (int)packetInfo.height << " "
+                                      << CAST32(packetInfo.maxVideosize) << "\n";
+                            // TODO: prepare data area for video data input
+                            VideoPackets videopacket = {
+                                .vps = {
+                                    packetInfo,
+                                    0,
+                                    0,
+                                    0,
+                                },
+                                .videoDataRaw = std::make_shared<uint8_t>(),
+                            };
+                            // FIXME: should set as a framebuffer?
+                            videopacket.videoDataRaw.reset(new uint8_t[CAST32(packetInfo.maxVideosize)]);
+                            //
+                            VideoPacketsBuffer.push_back(videopacket);
                         }
                     }
-                    // Send a feedBack frame for caculating latency
+
+                    // TODO: Send a feedBack frame for caculating latency
                     // uint8_t FeedBack[] = {
                     //     FeedBackTrans,
                     //     (uint8_t)FramestreamID,
@@ -344,8 +373,8 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff()
                 else if (Framesequeue == 0xf)
                 {
                     // recv a feedBack frame for caculating latency
-                    std::string dataTransfer(dataTmp + HeaderSize, dataTmp + size - 1);
-                    DataEBuffer.push(dataTransfer);
+                    // std::string dataTransfer(dataTmp + HeaderSize, dataTmp + size - 1);
+                    // DataEBuffer.push(dataTransfer);
                 }
                 //
             }
@@ -353,14 +382,12 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff()
             {
                 // Not the Target Frame, throw.
             }
+
+            return;
+
+        framereset:
+            videoTarget->vps.dataLose++;
+            videoTarget->vps.currentDataSize = 0;
+            return;
         }));
 }
-
-void WIFIBroadCast::WIFICastDriver::WIFIRecvWaitFrame()
-{
-    std::unique_lock<std::mutex> lockWait{copylock};
-    while (!IsFrameGet)
-        notifyWait.wait(lockWait);
-
-    IsFrameGet = false;
-};

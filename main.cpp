@@ -6,15 +6,29 @@
 #include "WIFICastDriver.hpp"
 #include <opencv4/opencv2/opencv.hpp>
 
+#include "crc32.h"
+
+extern "C"
+{
 #include <libavutil/error.h>
+}
 
 int main(int argc, char const *argv[])
 {
-    std::queue<std::tuple<uint8_t *, int>> dataque;
+    std::queue<std::tuple<std::shared_ptr<uint8_t>, int>> dataque;
+
+    char cmd[64];
+    sprintf(cmd, "iw dev %s set type monitor", argv[1]);
+    system(cmd);
+    sprintf(cmd, "iw dev %s set monitor fcsfail", argv[1]);
+    system(cmd);
+    sprintf(cmd, "iw dev %s set freq 5600", argv[1]);
+    system(cmd);
+    sprintf(cmd, "iw dev %s set txpower fixed 3000", argv[1]);
+    system(cmd);
 
     WIFIBroadCast::WIFICastDriver *test;
-    test = new WIFIBroadCast::WIFICastDriver({"wlan1"});
-    test->WIFIRecvSinff();
+    test = new WIFIBroadCast::WIFICastDriver({argv[1]});
 
     int parseerror = 0;
     FFMPEGTools::FFMPEGDecodec decoder;
@@ -22,95 +36,46 @@ int main(int argc, char const *argv[])
     cv::namedWindow("test", cv::WINDOW_NORMAL);
     cv::setWindowProperty("test", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
 
-    FlowThread res(
-        [&]
+    test->WIFIRecvSinff(
+        [&](auto data)
         {
-            if (test->WIFIRecvVideoSeq() > 0)
+            int datauSize = data->videoRawSize;
+            std::shared_ptr<uint8_t> datau;
+            datau.reset(new uint8_t[data->videoRawSize]);
+            std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau.get());
+            // for (size_t i = 0; i < data->videoRawSize; i++)
+            // {
+            //     if (datau[i] == 0 && datau[i + 1] == 0 &&
+            //         datau[i + 2] == 0 && datau[i + 3] == 1)
+            //     {
+            //         std::cout << "offset: " << std::setw(7) << std::setfill(' ') << i << " -> ";
+            //         std::cout << "header: " << std::hex << "0x" << (int)datau[i + 4] << std::dec << " <--> ";
+            //     }
+            // }
+            // std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau);
+            // FIXME: copy without ffsync id
+            int crcGet = ((int)data->videoDataRaw.get()[datauSize - 4]) |
+                         ((int)data->videoDataRaw.get()[datauSize - 3] << 8) |
+                         ((int)data->videoDataRaw.get()[datauSize - 2] << 16) |
+                         ((int)data->videoDataRaw.get()[datauSize - 1] << 24);
+
+            // TODO: check CRC32
+            uint32_t table[256];
+            crc32::generate_table(table);
+            uint32_t crc = crc32::update(table, 0, data->videoDataRaw.get(), datauSize - 4);
+            if (crc == crcGet)
             {
-                auto data = test->WIFIRecvVideoDMA(0);
-
-                test->WIFIRecvWaitFrame();
-                if (std::get<int *>(data)[DATA_SIZENOW] > 0)
-                {
-                    int datauSize = std::get<int *>(data)[DATA_SIZENOW];
-                    uint8_t *datau = new uint8_t[datauSize];
-                    std::copy(std::get<unsigned char *>(data), std::get<unsigned char *>(data) + datauSize, datau);
-
-                    //
-                    dataque.push(std::make_tuple(datau, std::get<int *>(data)[DATA_SIZENOW]));
-                    // {
-                    //     for (size_t i = 0; i < datauSize; i++)
-                    //     {
-                    //         if (datau[i] == 0 && datau[i + 1] == 0 &&
-                    //             datau[i + 2] == 0 && datau[i + 3] == 1)
-                    //         {
-                    //             // std::cout << "header: " << std::hex << "0x" << (int)datau[i + 4] << std::dec << "\n";
-                    //             // std::cout << "size:   " << datauSize << "\n";
-                    //             //
-                    //             // if (datau[i + 4] == 0x68)
-                    //             // {
-                    //             //     decoder.FFMPEGDecodecInsert((datau + i), datauSize - i);
-                    //             //     datauSize = i;
-                    //             // }
-                    //         }
-                    //     }
-                    // }
-                    //
-                    // char errmsg[2000];
-                    // int err = decoder.FFMPEGDecodecInsert(datau, datauSize);
-                    // if (err < 0)
-                    // {
-                    //     std::cout << av_make_error_string(errmsg, 2000, err) << "\n\n";
-                    //     parseerror++;
-                    // }
-                    // FFMPEGTools::AVData dataf = decoder.FFMPEGDecodecGetFrame();
-                    // if (dataf.width != -1)
-                    // {
-                    //     cv::Mat matData(dataf.height, dataf.width, CV_8UC3, dataf.data);
-
-                    //     if (!matData.empty())
-                    //     {
-                    //         cv::flip(matData, matData, -1);
-                    //         cv::resize(matData, matData, cv::Size(1024, 768));
-
-                    //         cv::imshow("test", matData);
-                    //         cv::waitKey(5);
-                    //     }
-                    // }
-                }
-
-                // std::get<int *>(data)[DATA_SIZENOW] = 0;
+                std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " \n";
+                dataque.push(std::make_tuple(datau, data->videoRawSize));
+            }
+            else
+            {
+                std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " ";
+                std::cout << "data crc error\n";
             }
         });
 
-    // FlowThread resq(
-    //     [&]
-    //     {
-    //         if (dataque.size() > 0)
-    //         {
-    //             for (size_t i = 0; i < std::get<int>(dataque.front()); i++)
-    //             {
-    //                 std::cout << std::get<uint8_t *>(dataque.front())[i];
-    //             }
-    //             std::cout.flush();
-    //             dataque.pop();
-    //         }
-    //     },
-    //     30.f);
-
-    FlowThread ree(
-        [&]
-        {
-            if (test->WIFIRecvVideoSeq() > 0)
-            {
-                auto data = test->WIFIRecvVideoDMA(0);
-                std::cout << "dataLose:" << std::get<int *>(data)[DATA_LOSE] << '\n';
-                std::cout << "h264Lose:" << parseerror << '\n';
-            }
-        },
-        1.f);
-
-    // int IframePer = 0;
+    int IframePer = 0;
     int lastLose = 0;
     FlowThread rest(
         [&]
@@ -120,48 +85,17 @@ int main(int argc, char const *argv[])
                 for (; !dataque.empty(); dataque.pop())
                 {
                     char errmsg[2000];
-                    int err = decoder.FFMPEGDecodecInsert(std::get<uint8_t *>(dataque.front()), std::get<int>(dataque.front()));
+                    // std::cout << "head: " << (int)std::get<uint8_t *>(dataque.front())[std::get<int>(dataque.front())] << '\n';
+                    int err = decoder.FFMPEGDecodecInsert(std::get<std::shared_ptr<uint8_t>>(dataque.front()).get(), std::get<int>(dataque.front()));
 
                     if (err < 0)
                     {
-                        parseerror++;
-                        // std::cout << av_make_error_string(errmsg, 2000, err) << "\n\n";
-                    }
-
-                    {
-                        auto data = test->WIFIRecvVideoDMA(0);
-                        for (size_t i = 0; i < std::get<int>(dataque.front()); i++)
-                        {
-                            if (std::get<uint8_t *>(dataque.front())[i] == 0 && std::get<uint8_t *>(dataque.front())[i + 1] == 0 &&
-                                std::get<uint8_t *>(dataque.front())[i + 2] == 0 && std::get<uint8_t *>(dataque.front())[i + 3] == 1)
-                            {
-                                // std::cout << "offset: " << std::setw(7) << std::setfill(' ') << i << " -> ";
-                                // std::cout << "header: " << std::hex << "0x" << (int)std::get<uint8_t *>(dataque.front())[i + 4] << std::dec << " <--> ";
-                                // if ((int)std::get<uint8_t *>(dataque.front())[i + 4] == 0x65)
-                                // {
-                                //     if (std::get<int *>(data)[DATA_LOSE] > lastLose)
-                                //     {
-                                //         std::cout << "oops! \n";
-                                //     }
-                                //     lastLose = std::get<int *>(data)[DATA_LOSE];
-                                // }
-
-                                // if ((int)std::get<uint8_t *>(dataque.front())[i + 4] == 0x41)
-                                //     IframePer++;
-                                // if (IframePer > 32)
-                                // {
-                                //     std::cout << "===========================================================================================================================================I Missing!\n";
-                                //     IframePer = 0;
-                                // }
-                                // if ((int)std::get<uint8_t *>(dataque.front())[i + 4] == 0x65)
-                                //     IframePer = 0;
-                            }
-                        }
-                        // std::cout << " <==========> size-got: " << std::get<int>(dataque.front()) << " \n";
+                        char otp[AV_ERROR_MAX_STRING_SIZE] = {0};
+                        // printf("%s \n", av_make_error_string(otp, AV_ERROR_MAX_STRING_SIZE, err));
+                        // parseerror++;
                     }
                 }
                 // TODO: check header and found header to comfirm
-
                 {
                     while (true)
                     {
@@ -179,11 +113,10 @@ int main(int argc, char const *argv[])
                             break;
                     }
                 }
-                //
-                // dataque.pop();
             }
         });
 
-    res.FlowWait();
+    sleep(-1);
+    // res.FlowWait();
     return 0;
 }
