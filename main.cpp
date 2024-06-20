@@ -13,8 +13,19 @@ extern "C"
 #include <libavutil/error.h>
 }
 
+uint32_t GetTimeStamp()
+{
+    struct timespec tv;
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return ((tv.tv_sec * (uint32_t)1000000 + (tv.tv_nsec / 1000)));
+}
+
 int main(int argc, char const *argv[])
 {
+    uint64_t datarecive = 0;
+    uint64_t dataLose = 0;
+    double dataLoseRate = 0;
+
     std::queue<std::tuple<std::shared_ptr<uint8_t>, int>> dataque;
 
     char cmd[64];
@@ -39,20 +50,22 @@ int main(int argc, char const *argv[])
     test->WIFIRecvSinff(
         [&](auto data)
         {
+            int start = GetTimeStamp();
+            datarecive++;
             int datauSize = data->videoRawSize;
             std::shared_ptr<uint8_t> datau;
             datau.reset(new uint8_t[data->videoRawSize]);
             std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau.get());
-            // for (size_t i = 0; i < data->videoRawSize; i++)
-            // {
-            //     if (datau[i] == 0 && datau[i + 1] == 0 &&
-            //         datau[i + 2] == 0 && datau[i + 3] == 1)
-            //     {
-            //         std::cout << "offset: " << std::setw(7) << std::setfill(' ') << i << " -> ";
-            //         std::cout << "header: " << std::hex << "0x" << (int)datau[i + 4] << std::dec << " <--> ";
-            //     }
-            // }
-            // std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau);
+            for (size_t i = 0; i < data->videoRawSize; i++)
+            {
+                if (datau.get()[i] == 0 && datau.get()[i + 1] == 0 &&
+                    datau.get()[i + 2] == 0 && datau.get()[i + 3] == 1)
+                {
+                    std::cout << "offset: " << std::setw(7) << std::setfill(' ') << i << " -> ";
+                    std::cout << "header: " << std::hex << "0x" << (int)datau.get()[i + 4] << std::dec << " <--> ";
+                }
+            }
+            std::cout << "\n";
             // FIXME: copy without ffsync id
             int crcGet = ((int)data->videoDataRaw.get()[datauSize - 4]) |
                          ((int)data->videoDataRaw.get()[datauSize - 3] << 8) |
@@ -70,9 +83,21 @@ int main(int argc, char const *argv[])
             }
             else
             {
+                dataLose++;
                 std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " ";
-                std::cout << "data crc error\n";
+                std::cout << "\033[31m data crc error \033[0m\n";
             }
+
+            if (datarecive == 300)
+            {
+                datarecive = datarecive / 10;
+                dataLose = dataLose / 10;
+            }
+
+            std::cout << "\033[32mdataLoseRate: " << (int)(((double)dataLose / (double)datarecive) * 100.f) << "\033[0m\n";
+            int end = GetTimeStamp();
+
+            std::cout << "check time using:" << std::dec << end - start << "\n";
         });
 
     int IframePer = 0;
@@ -85,7 +110,6 @@ int main(int argc, char const *argv[])
                 for (; !dataque.empty(); dataque.pop())
                 {
                     char errmsg[2000];
-                    // std::cout << "head: " << (int)std::get<uint8_t *>(dataque.front())[std::get<int>(dataque.front())] << '\n';
                     int err = decoder.FFMPEGDecodecInsert(std::get<std::shared_ptr<uint8_t>>(dataque.front()).get(), std::get<int>(dataque.front()));
 
                     if (err < 0)

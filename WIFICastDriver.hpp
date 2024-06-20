@@ -260,17 +260,6 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
         {
             uint8_t dataTmp[SocketMTUMAX] = {0x00};
             SocketInjectors[0]->Sniff(dataTmp, SocketMTUMAX);
-
-            // for (size_t i = 0; i < SocketMTUMAX; i++)
-            // {
-            //     if (dataTmp[i] == 0 && dataTmp[i + 1] == 0 &&
-            //         dataTmp[i + 2] == 0 && dataTmp[i + 3] == 1)
-            //     {
-            //         std::cout << "offset: " << std::setw(7) << std::setfill(' ') << i << " -> ";
-            //         std::cout << "header: " << std::hex << "0x" << (int)dataTmp[i + 4] << std::dec << " <--> ";
-            //     }
-            // }
-            // std::cout << "\n";
             // FIXME: must locate every frame one by one
             // From data HeaderSize:
             int size = dataTmp[FrameTypeL - 1];
