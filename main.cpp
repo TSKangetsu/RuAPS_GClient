@@ -31,15 +31,21 @@ int main(int argc, char const *argv[])
     char cmd[64];
     sprintf(cmd, "iw dev %s set type monitor", argv[1]);
     system(cmd);
-    sprintf(cmd, "iw dev %s set monitor fcsfail", argv[1]);
+    sprintf(cmd, "iw dev %s set monitor fcsfail otherbss", argv[1]);
     system(cmd);
-    sprintf(cmd, "iw dev %s set freq 5600", argv[1]);
+    sprintf(cmd, "iw dev %s set freq 5600 NOHT", argv[1]);
     system(cmd);
     sprintf(cmd, "iw dev %s set txpower fixed 3000", argv[1]);
     system(cmd);
 
     WIFIBroadCast::WIFICastDriver *test;
     test = new WIFIBroadCast::WIFICastDriver({argv[1]});
+
+    // uint8_t dats[] = {0xFF, 0xFF, 0xFF, 0xFF};
+    // while (true)
+    // {
+    //    test->WIFICastInject(dats, 4, 0, WIFIBroadCast::BroadCastType::VideoStream, 0, 0);
+    // }
 
     int parseerror = 0;
     FFMPEGTools::FFMPEGDecodec decoder;
