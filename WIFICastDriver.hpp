@@ -77,6 +77,12 @@ namespace WIFIBroadCast
         std::shared_ptr<uint8_t> videoDataRaw;
     };
 
+    struct WirelessInfo
+    {
+        int antenSignal;
+        int signalQuality;
+    };
+
     class WIFICastDriver
     {
     public:
@@ -90,7 +96,7 @@ namespace WIFIBroadCast
         void WIFICastInjectMulti(uint8_t *data, int size, int delayUS) {};
         void WIFICastInjectMultiBL(uint8_t *data, int size, int delayUS) {};
         //
-        void WIFIRecvSinff(std::function<void(VideoPackets *)> vcallback);
+        void WIFIRecvSinff(std::function<void(VideoPackets *, WirelessInfo)> vcallback);
 
     private:
         struct InjectPacketLLCInfo
@@ -131,7 +137,7 @@ namespace WIFIBroadCast
         std::unique_ptr<FlowThread> RecvThread;
         std::vector<VideoPackets> VideoPacketsBuffer;
 
-        std::function<void(VideoPackets *)> videoCallBack;
+        std::function<void(VideoPackets *, WirelessInfo)> videoCallBack;
     };
 }
 
@@ -264,14 +270,17 @@ void WIFIBroadCast::WIFICastDriver::WIFICastInject(uint8_t *data, int len, int I
     }
 }
 
-void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPackets *)> vcallback)
+void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPackets *, WirelessInfo)> vcallback)
 {
     videoCallBack = vcallback;
 
     RecvThread.reset(new FlowThread(
         [&]()
         {
-            uint8_t dataTmp[SocketMTUMAX] = {0x00};
+            std::shared_ptr<uint8_t> dataTmps;
+            dataTmps.reset(new uint8_t[SocketMTUMAX]);
+            uint8_t *dataTmp = dataTmps.get();
+            // WirelessInfo wirelessinfo;
             SocketInjectors[0]->Sniff(dataTmp, SocketMTUMAX);
             // FIXME: must locate every frame one by one
             // From data HeaderSize:
@@ -307,7 +316,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                     if (Framesequeue == 0xf) // end packet
                     {
                         videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
-                        videoCallBack(videoTarget);
+                        videoCallBack(videoTarget, {.antenSignal = (int8_t)dataTmp[22], .signalQuality = (dataTmp[24] | (dataTmp[25] << 8))});
                         // TODO: add a signal to notify data is ready
                         // FIXME: Direct to wait next frame?
                         videoTarget->vps.currentDataSize = 0;
@@ -320,7 +329,8 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                         {
                             // Throw frame if lose
                             // FIXME: should not throw
-                            goto framereset;
+                            // std::cout << "\033[32mdata cliching " << "\033[0m\n";
+                            // goto framereset;
                         }
                         videoTarget->vps.currentFrameSeq = Framesequeue;
                     }

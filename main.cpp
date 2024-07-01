@@ -54,7 +54,7 @@ int main(int argc, char const *argv[])
     cv::setWindowProperty("test", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
 
     test->WIFIRecvSinff(
-        [&](auto data)
+        [&](auto data, auto wirelssinfo)
         {
             int start = GetTimeStamp();
             datarecive++;
@@ -100,7 +100,8 @@ int main(int argc, char const *argv[])
                 dataLose = dataLose / 10;
             }
 
-            std::cout << "\033[32mdataLoseRate: " << (int)(((double)dataLose / (double)datarecive) * 100.f) << "\033[0m\n";
+            std::cout << "\033[32mdataLoseRate: " << (int)(((double)dataLose / (double)datarecive) * 100.f)
+                      << " datasignal:" << wirelssinfo.antenSignal << " signalQ:" << wirelssinfo.signalQuality << "\033[0m\n ";
             int end = GetTimeStamp();
 
             std::cout << "check time using:" << std::dec << end - start << "\n";
