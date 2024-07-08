@@ -26,7 +26,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(Threads REQUIRED)
 
-add_executable(sinffer main.cpp)
+add_executable(sinffer fec.cpp main.cpp)
 target_link_libraries(sinffer ${AV_Tool_LIB})
 target_link_libraries(sinffer ${OpenCV_LIBS})
 target_link_libraries(sinffer Threads::Threads)
