@@ -53,7 +53,7 @@ int main(int argc, char const *argv[])
     cv::setWindowProperty("test", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
 
     test->WIFIRecvSinff(
-        [&](auto data, auto wirelssinfo, auto streamID)
+        [&](WIFIBroadCast::VideoPackets *data, auto wirelssinfo, auto streamID)
         {
             datarecive++;
             int start = GetTimeStamp();
@@ -62,8 +62,17 @@ int main(int argc, char const *argv[])
             datau.reset(new uint8_t[data->videoRawSize]);
             std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau.get());
 
-            if (streamID == 0)
+            if (streamID == 0) // RAW data here
             {
+                std::cout << '\n';
+                std::cout << "\033[33mframeMark:" << data->vps.currentFrameMark << "\033[0m\n";
+                std::cout << "\033[33mcheck block: ";
+                for (; !data->vps.blockAvaliable.empty(); data->vps.blockAvaliable.pop())
+                {
+                    std::cout << std::hex << (int)data->vps.blockAvaliable.front() << " ";
+                }
+                std::cout << "\033[0m\n";
+
                 for (size_t i = 0; i < data->videoRawSize; i++)
                 {
                     if (datau.get()[i] == 0 && datau.get()[i + 1] == 0 &&
@@ -101,12 +110,11 @@ int main(int argc, char const *argv[])
                     datarecive = datarecive / 10;
                     dataLose = dataLose / 10;
                 }
+                int end = GetTimeStamp();
+                std::cout << "check time using:" << std::dec << end - start << "\n";
 
                 std::cout << "\033[32mdataLoseRate: " << (int)(((double)dataLose / (double)datarecive) * 100.f)
                           << " datasignal:" << wirelssinfo.antenSignal << " signalQ:" << wirelssinfo.signalQuality << "\033[0m\n ";
-                int end = GetTimeStamp();
-
-                std::cout << "check time using:" << std::dec << end - start << "\n";
             }
         });
 

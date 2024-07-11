@@ -67,6 +67,8 @@ namespace WIFIBroadCast
         uint32_t dataLose;
         uint32_t currentFrameSeq;
         uint32_t currentDataSize;
+        uint32_t currentFrameMark;
+        std::queue<unsigned int> blockAvaliable;
     };
 
     struct VideoPackets
@@ -300,7 +302,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
             int FramestreamID = (dataTmp[size - 1] >> 5);
             int Framesequeue = (dataTmp[size - 1] - (FramestreamID << 5));
             int FrameMarking = dataTmp[size - 2];
-            std::cout << FramestreamID << " " << Framesequeue << " " << FrameMarking << "\n";
+            // std::cout << FramestreamID << " " << Framesequeue << " " << FrameMarking << "\n";
 
             int LocateID = -1;
             bool PacketNotReg = true;
@@ -319,33 +321,64 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                 if (videoTarget->vps.currentDataSize <=
                     CAST32(videoTarget->vps.info.maxVideosize))
                 {
+                errorrecover:
+                    if (FrameMarking != videoTarget->vps.currentFrameMark)
+                    {
+                        // it means frame losing or frame switched, check frame 0x1f
+                        if (videoTarget->vps.currentDataSize != 0)
+                            goto framefinshed;
+                        videoTarget->vps.currentFrameMark = FrameMarking;
+                    }
                     // JUST COPY IT, I dont't care
                     std::copy((dataTmp + HeaderSize),
                               (dataTmp + size),
                               videoTarget->videoDataRaw.get() + videoTarget->vps.currentDataSize);
                     videoTarget->vps.currentDataSize += (size - HeaderSize - 2);
 
-                    if (Framesequeue == 0x1f) // end packet
+                    if (Framesequeue == 0x1f)
                     {
+                    framefinshed:
+                        // Marking change means tranfer complete
+                        if (FrameMarking == videoTarget->vps.currentFrameMark)
+                            videoTarget->vps.blockAvaliable.push(Framesequeue);
                         videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
                         videoCallBack(videoTarget, {.antenSignal = (int8_t)dataTmp[22], .signalQuality = (dataTmp[24] | (dataTmp[25] << 8))}, FramestreamID);
                         // TODO: add a signal to notify data is ready
                         // FIXME: Direct to wait next frame?
                         videoTarget->vps.currentDataSize = 0;
                         std::memset(videoTarget->videoDataRaw.get(), 0, videoTarget->videoRawSize);
+                        videoTarget->vps.blockAvaliable = std::queue<unsigned int>(); // Clean block recv info
+                        // no 0x1f ending losing packet, just goto deal with anther packet now, because data is dealed
+                        if (FrameMarking != videoTarget->vps.currentFrameMark)
+                            goto errorrecover;
                     }
-                    else // continue packet
+                    else
                     {
-                        if (!(Framesequeue == videoTarget->vps.currentFrameSeq + 1 ||
-                              (videoTarget->vps.currentFrameSeq == 0x1e && Framesequeue == 0x0)))
-                        {
-                            // Throw frame if lose
-                            // FIXME: should not throw
-                            // std::cout << "\033[32mdata cliching " << "\033[0m\n";
-                            // goto framereset;
-                        }
-                        videoTarget->vps.currentFrameSeq = Framesequeue;
+                        // continue packet
+                        videoTarget->vps.blockAvaliable.push(Framesequeue);
                     }
+
+                    // if (Framesequeue == 0x1f) // end packet
+                    // {
+                    //     videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
+                    //     videoCallBack(videoTarget, {.antenSignal = (int8_t)dataTmp[22], .signalQuality = (dataTmp[24] | (dataTmp[25] << 8))}, FramestreamID);
+                    //     // TODO: add a signal to notify data is ready
+                    //     // FIXME: Direct to wait next frame?
+                    //     videoTarget->vps.currentDataSize = 0;
+                    //     std::memset(videoTarget->videoDataRaw.get(), 0, videoTarget->videoRawSize);
+                    // }
+                    // else // continue packet
+                    // {
+                    //     if (!(Framesequeue == videoTarget->vps.currentFrameSeq + 1 ||
+                    //           (videoTarget->vps.currentFrameSeq == 0x1e && Framesequeue == 0x0)))
+                    //     {
+                    //         // Throw frame if lose
+                    //         // FIXME: should not throw
+                    //         // std::cout << "\033[32mdata cliching " << "\033[0m\n";
+                    //         // goto framereset;
+                    //     }
+                    //     videoTarget->vps.currentFrameSeq = Framesequeue;
+                    // }
                 }
                 else
                 {
