@@ -1,6 +1,6 @@
 #include <iostream>
 #include <unistd.h>
-#include "fec.h"
+#include "fec.hpp"
 #include <bitset>
 #include <climits>
 #include <cstring>
@@ -8,66 +8,67 @@
 
 int main(int argc, char const *argv[])
 {
+    // TEST PASSED
     fec_init();
-    //
-    uint8_t fecPool_t[5][500] = {{0x00}};
-    uint8_t dataPool_t[5][500] = {{0x00}};
-    uint8_t dataPoolsp_t[5][500] = {{0x00}};
-    uint8_t *fecPool[5];
-    uint8_t *dataPool[5];
-    uint8_t *dataPoolsp[5];
 
-    uint8_t fecPoolsp_t[5][500] = {{0x00}};
-    uint8_t *fecPoolsp[5];
+    FecPacket<2500, 5, 500> dataPool;
+    FecPacket<2500, 5, 500> fecPool;
+    FecPacket<2500, 5, 500> fecPoolUse;
+    FecPacket<2500, 5, 500> dataPoolFake;
 
-    unsigned int fecnos[5] = {1, 2, 0, 0, 0}; // ID fec get
-    unsigned int ersnos[5] = {3, 4, 0, 0, 0}; // ID error frame
+    std::memset(fecPool.FecDataType_t.data1d, 0x00, 2500);
+    std::memset(dataPool.FecDataType_t.data1d, 0x00, 2500);
+    std::memset(dataPool.FecDataType_t.data1d, 0xFF, 500);
+    std::memset(dataPoolFake.FecDataType_t.data1d, 0x00, 2500);
+    std::memset(dataPoolFake.FecDataType_t.data1d + 1000, 0xFF, 500);
+    dataPool.FecDataType_t.data1d[15] = 0x7F;
 
-    for (size_t i = 0; i < 5; i++)
+    for (size_t i = 0; i < 2500; i++)
     {
-        fecPool[i] = fecPool_t[i];
-        dataPool[i] = dataPool_t[i];
-        dataPoolsp[i] = dataPoolsp_t[i];
-        fecPoolsp[i] = fecPoolsp_t[i];
+        std::cout << std::hex << (int)dataPoolFake.FecDataType_t.data1d[i] << " ";
     }
-    std::memset(dataPool[0], 0xFF, 500);
-    dataPool[0][250] = 0x7F;
-    std::memset(dataPoolsp[0], 0xFF, 500);
-    dataPoolsp[0][250] = 0x7F;
-    //////////////////////////////////////////////////////////////////////////////
+    std::cout << '\n';
+    std::cout << '\n';
     for (size_t i = 0; i < 5; i++)
     {
         for (size_t k = 0; k < 500; k++)
         {
-            std::cout << std::hex << (int)dataPool[i][k] << " ";
+            std::cout << std::hex << (int)dataPoolFake.FecDataType_t.data2d[i][k] << " ";
         }
     }
-    std::cout << "\n======================================================\n";
+    std::cout << '\n';
+    std::cout << '\n';
 
-    fec_encode(500, dataPool, 5, fecPool, 5);
-    //////////////////////////////////////////////////////////////////////////////
-    std::memset(dataPoolsp[3], 0xFF, 500); // add error here
-    std::memset(dataPoolsp[4], 0xFF, 500); // add error here
+    fec_encode(500, dataPool.dataout, 5, fecPool.dataout, 5);
+
+    unsigned int fecnos[] = {0, 1, 0, 0, 0};
+    unsigned int earnos[] = {0, 2, 0, 0, 0};
+    std::memcpy(fecPoolUse.FecDataType_t.data2d[0],
+                fecPool.FecDataType_t.data2d[0],
+                sizeof(fecPool.FecDataType_t.data2d[0]));
+    std::memcpy(fecPoolUse.FecDataType_t.data2d[1],
+                fecPool.FecDataType_t.data2d[1],
+                sizeof(fecPool.FecDataType_t.data2d[2]));
+
+    fec_decode(500, dataPoolFake.dataout, 5,
+               fecPoolUse.dataout,
+               fecnos, earnos,
+               2);
+
+    for (size_t i = 0; i < 2500; i++)
+    {
+        std::cout << std::hex << (int)dataPoolFake.FecDataType_t.data1d[i] << " ";
+    }
+    std::cout << '\n';
+    std::cout << '\n';
     for (size_t i = 0; i < 5; i++)
     {
         for (size_t k = 0; k < 500; k++)
         {
-            std::cout << std::hex << (int)dataPoolsp[i][k] << " ";
+            std::cout << std::hex << (int)dataPoolFake.FecDataType_t.data2d[i][k] << " ";
         }
     }
-    std::cout << "\n======================================================\n";
-    fecPoolsp[0] = fecPool[1];
-    fecPoolsp[1] = fecPool[2];
-    // fecPoolsp[2] = fecPool[4];
-    fec_decode(500, dataPoolsp, 5, fecPoolsp, fecnos, ersnos, 2);
-    //
-    for (size_t i = 0; i < 5; i++)
-    {
-        for (size_t k = 0; k < 500; k++)
-        {
-            std::cout << std::hex << (int)dataPoolsp[i][k] << " ";
-        }
-    }
+    std::cout << '\n';
 
     return 0;
 }

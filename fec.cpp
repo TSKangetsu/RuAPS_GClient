@@ -48,7 +48,7 @@
 #include <string.h>
 
 #include <assert.h>
-#include "fec.h"
+#include "fec.hpp"
 
 /*
  * stuff used for testing purposes only
