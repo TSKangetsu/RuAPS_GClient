@@ -6,6 +6,9 @@
 #include <opencv4/opencv2/opencv.hpp>
 
 #include "crc32.h"
+#include "fec.hpp"
+#define FEC_PACKET_MAX 32
+#define FEC_DATA_MAX (FEC_PACKET_MAX * PacketPrePacks)
 
 extern "C"
 {
@@ -25,6 +28,8 @@ int main(int argc, char const *argv[])
     uint64_t dataLose = 0;
     double dataLoseRate = 0;
 
+    bool dataisLose = false;
+    std::deque<unsigned int> *packAVA;
     std::queue<std::tuple<std::shared_ptr<uint8_t>, int>> dataque;
 
     char cmd[64];
@@ -37,18 +42,17 @@ int main(int argc, char const *argv[])
     sprintf(cmd, "iw dev %s set txpower fixed 3000", argv[1]);
     system(cmd);
 
+    fec_init();
+
     WIFIBroadCast::WIFICastDriver *test;
     test = new WIFIBroadCast::WIFICastDriver({argv[1]});
 
-    // uint8_t dats[] = {0xFF, 0xFF, 0xFF, 0xFF};
-    // while (true)
-    // {
-    //    test->WIFICastInject(dats, 4, 0, WIFIBroadCast::BroadCastType::VideoStream, 0, 0);
-    // }
-
     int parseerror = 0;
-    FFMPEGTools::FFMPEGDecodec decoder;
 
+    WIFIBroadCast::VideoPackets *errorFrameTmp = new WIFIBroadCast::VideoPackets;
+    errorFrameTmp->videoDataRaw.reset(new uint8_t[FEC_DATA_MAX]);
+
+    FFMPEGTools::FFMPEGDecodec decoder;
     cv::namedWindow("test", cv::WINDOW_NORMAL);
     cv::setWindowProperty("test", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
 
@@ -57,22 +61,15 @@ int main(int argc, char const *argv[])
         {
             datarecive++;
             int start = GetTimeStamp();
-            int datauSize = data->videoRawSize;
-            std::shared_ptr<uint8_t> datau;
-            datau.reset(new uint8_t[data->videoRawSize]);
-            std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau.get());
-
             if (streamID == 0) // RAW data here
             {
+                int datauSize = data->videoRawSize;
+                std::shared_ptr<uint8_t> datau;
+                datau.reset(new uint8_t[data->videoRawSize]);
+                std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau.get());
+                //=============================================================================//
                 std::cout << '\n';
-                std::cout << "\033[33mframeMark:" << data->vps.currentFrameMark << "\033[0m\n";
-                std::cout << "\033[33mcheck block: ";
-                for (; !data->vps.blockAvaliable.empty(); data->vps.blockAvaliable.pop())
-                {
-                    std::cout << std::hex << (int)data->vps.blockAvaliable.front() << " ";
-                }
-                std::cout << "\033[0m\n";
-
+                std::cout << "\033[33mframeMark:" << data->vps.currentFrameMark << " frame packet count: " << data->vps.currentPacketSize << "\033[0m\n";
                 for (size_t i = 0; i < data->videoRawSize; i++)
                 {
                     if (datau.get()[i] == 0 && datau.get()[i + 1] == 0 &&
@@ -97,12 +94,22 @@ int main(int argc, char const *argv[])
                 {
                     std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " \n";
                     dataque.push(std::make_tuple(datau, data->videoRawSize));
+                    dataisLose = false;
                 }
                 else
                 {
                     dataLose++;
                     std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " ";
                     std::cout << "\033[31m data crc error \033[0m\n";
+                    // TODO: adding FEC wait flag next
+                    dataisLose = true;
+                    // SOME DATA MUST COPY BY SELF
+                    {
+                        errorFrameTmp->vps = data->vps;
+                        std::memset(errorFrameTmp->videoDataRaw.get(), 0x00, data->vps.currentPacketSize * PacketPrePacks);
+                        std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + data->videoRawSize - 4, errorFrameTmp->videoDataRaw.get());
+                        errorFrameTmp->videoRawSize = data->videoRawSize;
+                    }
                 }
 
                 if (datarecive == 300)
@@ -114,7 +121,147 @@ int main(int argc, char const *argv[])
                 std::cout << "check time using:" << std::dec << end - start << "\n";
 
                 std::cout << "\033[32mdataLoseRate: " << (int)(((double)dataLose / (double)datarecive) * 100.f)
-                          << " datasignal:" << wirelssinfo.antenSignal << " signalQ:" << wirelssinfo.signalQuality << "\033[0m\n ";
+                          << " datasignal:" << wirelssinfo.antenSignal << " signalQ:" << wirelssinfo.signalQuality << "\033[0m\n";
+            }
+            else if (streamID == 1 && dataisLose)
+            {
+                // TODO: adding FEC decode fix data
+                // fec data is append after frame, just check framemarker
+                if (errorFrameTmp->vps.currentFrameMark == data->vps.currentFrameMark)
+                {
+                    // ========================================================================================//
+                    FecPacket<FEC_DATA_MAX, FEC_PACKET_MAX, PacketPrePacks> fecPool;
+                    FecPacket<FEC_DATA_MAX, FEC_PACKET_MAX, PacketPrePacks> dataPool;
+                    unsigned int FecNos[FEC_PACKET_MAX] = {0};
+                    unsigned int ErrNos[FEC_PACKET_MAX] = {0};
+
+                    std::memset(fecPool.FecDataType_t.data1d, 0x00, FEC_DATA_MAX);
+                    std::memset(dataPool.FecDataType_t.data1d, 0x00, FEC_DATA_MAX);
+
+                    int index = 0;
+                    int blocksizeIn = 0;
+                    int datalast = -1;
+                    int errorSize = 0;
+                    // std::cout << "\033[34mRaw data ava check:";
+
+                    for (; !errorFrameTmp->vps.pakcetAvaliable.empty(); errorFrameTmp->vps.pakcetAvaliable.pop_front())
+                    {
+                        int blockset = std::get<0>(errorFrameTmp->vps.pakcetAvaliable.front());
+                        int blocksize = std::get<1>(errorFrameTmp->vps.pakcetAvaliable.front());
+                        // copy data to block next
+                        std::copy((errorFrameTmp->videoDataRaw.get() + blocksizeIn),
+                                  (errorFrameTmp->videoDataRaw.get() + blocksizeIn + blocksize),
+                                  dataPool.FecDataType_t.data2d[blockset]);
+                        blocksizeIn += blocksize;
+
+                        // find err frame id
+                        if (datalast + 1 != blockset)
+                        {
+                            for (size_t i = 0; i < (blockset - datalast - 1); i++)
+                            {
+                                ErrNos[index] = datalast + i + 1;
+                                index++;
+                            }
+                        }
+                        datalast = blockset;
+                        errorSize = index;
+                        // debug
+                        // std::cout << std::hex << (int)blockset << " ";
+                    }
+
+                    // ========================================================================================//
+                    // std::cout << "\033[0m\n";
+                    // find final packet and fill errnos
+                    int lastpackmiss = ((errorFrameTmp->vps.currentPacketSize - 1) - datalast);
+                    // std::cout << "last pack: " << lastpackmiss << "\n";
+                    if (lastpackmiss > 0)
+                    {
+                        for (size_t i = 0; i < lastpackmiss; i++)
+                        {
+                            ErrNos[index] = datalast + 1 + i;
+                            index++;
+                        }
+                    }
+
+                    std::cout << "\033[34mERROR BLOCK check:";
+                    for (size_t i = 0; i < index; i++)
+                    {
+                        std::cout << std::hex << (int)ErrNos[i] << " ";
+                    }
+                    std::cout << "\033[0m\n";
+                    // ========================================================================================//
+                    index = 0;
+                    // std::cout << "\033[34mFEC data ava check:";
+                    for (; !data->vps.pakcetAvaliable.empty(); data->vps.pakcetAvaliable.pop_front())
+                    {
+                        // std::cout << std::hex << (int)std::get<0>(data->vps.pakcetAvaliable.front()) << " ";
+                        FecNos[index] = std::get<0>(data->vps.pakcetAvaliable.front());
+                        index++;
+                    }
+                    // std::cout << std::dec << "\033[0m\n";
+
+                    std::cout << "\033[34mFEC BLOCK check:";
+                    for (size_t i = 0; i < index; i++)
+                    {
+                        std::cout << FecNos[i] << " ";
+                    }
+
+                    std::cout << "\033[0m\n";
+                    std::copy((data->videoDataRaw.get()),
+                              (data->videoDataRaw.get() + data->videoRawSize),
+                              fecPool.FecDataType_t.data1d);
+
+                    // for (size_t i = 0; i < 12; i++)
+                    // {
+                    //     for (size_t k = 0; k < PacketPrePacks; k++)
+                    //     {
+                    //         std::cout << std::hex << (int)dataPool.FecDataType_t.data2d[i][k] << std::dec << " ";
+                    //     }
+                    //     std::cout << "===================\n";
+                    // }
+                    // std::cout << "\n";
+                    // std::cout << "\n";
+
+                    // for (size_t i = 0; i < 12; i++)
+                    // {
+                    //     for (size_t k = 0; k < PacketPrePacks; k++)
+                    //     {
+                    //         std::cout << std::hex << (int)fecPool.FecDataType_t.data2d[i][k] << std::dec << " ";
+                    //     }
+                    //     std::cout << "===================\n";
+                    // }
+                    // std::cout << "\n";
+                    // std::cout << "\n";
+
+                    fec_decode(PacketPrePacks,
+                               dataPool.dataout,
+                               errorFrameTmp->vps.currentPacketSize,
+                               fecPool.dataout,
+                               FecNos, ErrNos,
+                               errorSize);
+
+                    // for (size_t i = 0; i < PacketPrePacks; i++)
+                    // {
+                    //     std::cout << std::hex << (int)dataPool.FecDataType_t.data2d[ErrNos[0]][i] << std::dec << " ";
+                    // }
+                    // std::cout << "\n";
+
+                    // for (size_t k = 0; k < 16384; k++)
+                    // {
+                    //     std::cout << std::hex << (int)dataPool.FecDataType_t.data1d[k] << std::dec << " ";
+                    // }
+                    // std::cout << "===================\n";
+
+                    uint32_t table[256];
+                    crc32::generate_table(table);
+                    uint32_t crc = crc32::update(table, 0, dataPool.FecDataType_t.data1d, 16384);
+                    std::cout << "check crc fix: " << std::hex << crc << std::hex << "\n";
+
+                    // std::shared_ptr<uint8_t> datau;
+                    // datau.reset(new uint8_t[data->videoRawSize]);
+                    // std::copy(dataPool.FecDataType_t.data1d, dataPool.FecDataType_t.data1d + , datau.get());
+                    // dataque.push(std::make_tuple(datau, errorFrameTmp->videoRawSize));
+                }
             }
         });
 

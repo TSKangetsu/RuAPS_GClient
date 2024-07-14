@@ -8,7 +8,7 @@
             // Resolved by CMake Tools:
             "program": "${command:cmake.launchTargetPath}",
             "args": [
-                "wlxc43cb0bdb37d"
+                "wlxf832e4b5eb8b"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -24,7 +24,7 @@
                     "value": "Something something"
                 }
             ],
-            "miDebuggerPath": "/home/tskg/build/RuAPS_GClient/.vscode/gdb.sh",
+            "miDebuggerPath": "/home/tskg/APSCross/RuAPS_GClient/.vscode/gdb",
             "externalConsole": false,
             "MIMode": "gdb",
             "setupCommands": [

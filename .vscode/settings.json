@@ -62,5 +62,6 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp",
         "bitset": "cpp"
-    }
+    },
+    "C_Cpp.errorSquiggles": "disabled"
 }

@@ -6,33 +6,12 @@
 #include "Drive_Socket.hpp"
 #include "FlowController.hpp"
 #include <cstring>
-
+#include <deque>
 #include <iomanip>
-
-#define FrameTypeL 58
-#define FrameLLCMark 59
-#define VideoTrans 0x68
-#define DataETrans 0x69
-#define FeedBackTrans 0x77
-#define SocketMTU 1490 - 5 // FCS auto add by driver or kerenl
-#define HeaderSize 61
-#define SocketMTUMAX 1500
-#define LOSEMAXPRE 100
-
-#define DATA_STREAMID 0
-#define DATA_TMPSIZE 1
-#define DATA_WIDTH 2
-#define DATA_HEIGHT 3
-#define DATA_FRAMESEQ 4
-#define DATA_SIZENOW 5
-#define DATA_SIZEMAX 6
-#define DATA_LOSE 7
-#define DATA_LOSEPRE 8
 
 #define CAST32(x) reinterpret_cast<uint32_t *>(x)[0]
 
 #define HeaderSize 61
-
 #define FrameTypeL (HeaderSize - 3)
 #define FrameLLCMark (HeaderSize - 2)
 #define VideoTrans 0x68
@@ -68,7 +47,8 @@ namespace WIFIBroadCast
         uint32_t currentFrameSeq;
         uint32_t currentDataSize;
         uint32_t currentFrameMark;
-        std::queue<unsigned int> blockAvaliable;
+        uint32_t currentPacketSize;
+        std::deque<std::tuple<uint8_t, int>> pakcetAvaliable;
     };
 
     struct VideoPackets
@@ -300,9 +280,11 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
             size |= dataTmp[FrameTypeL - 2] << 8;
             // FIXME: must deal with data team together
             int FramestreamID = (dataTmp[size - 1] >> 5);
-            int Framesequeue = (dataTmp[size - 1] - (FramestreamID << 5));
-            int FrameMarking = dataTmp[size - 2];
-            // std::cout << FramestreamID << " " << Framesequeue << " " << FrameMarking << "\n";
+            uint8_t Framesequeue = (dataTmp[size - 1] - (FramestreamID << 5));
+            int FrameMarking = dataTmp[size - 2] >> 5;
+            int framepacketsize = (dataTmp[size - 2] - (FrameMarking << 5));
+
+            // std::cout << FramestreamID << " " << Framesequeue << " " << FrameMarking << " " << framepacketsize << "\n";
 
             int LocateID = -1;
             bool PacketNotReg = true;
@@ -314,6 +296,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                     LocateID = i;
                     PacketNotReg = false;
                     videoTarget = &VideoPacketsBuffer[LocateID];
+                    break;
                 }
             //
             if (dataTmp[FrameTypeL] == VideoTrans && !PacketNotReg && videoTarget)
@@ -340,14 +323,16 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                     framefinshed:
                         // Marking change means tranfer complete
                         if (FrameMarking == videoTarget->vps.currentFrameMark)
-                            videoTarget->vps.blockAvaliable.push(Framesequeue);
+                            videoTarget->vps.pakcetAvaliable.push_back(
+                                std::tuple<uint8_t, int>{(videoTarget->vps.currentPacketSize - 1), (size - HeaderSize - 2)});
+
                         videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
                         videoCallBack(videoTarget, {.antenSignal = (int8_t)dataTmp[22], .signalQuality = (dataTmp[24] | (dataTmp[25] << 8))}, FramestreamID);
                         // TODO: add a signal to notify data is ready
                         // FIXME: Direct to wait next frame?
+                        videoTarget->vps.pakcetAvaliable.clear();
                         videoTarget->vps.currentDataSize = 0;
                         std::memset(videoTarget->videoDataRaw.get(), 0, videoTarget->videoRawSize);
-                        videoTarget->vps.blockAvaliable = std::queue<unsigned int>(); // Clean block recv info
                         // no 0x1f ending losing packet, just goto deal with anther packet now, because data is dealed
                         if (FrameMarking != videoTarget->vps.currentFrameMark)
                             goto errorrecover;
@@ -355,30 +340,10 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                     else
                     {
                         // continue packet
-                        videoTarget->vps.blockAvaliable.push(Framesequeue);
+                        videoTarget->vps.currentPacketSize = framepacketsize;
+                        videoTarget->vps.pakcetAvaliable.push_back(
+                            std::tuple<uint8_t, int>{Framesequeue, (size - HeaderSize - 2)});
                     }
-
-                    // if (Framesequeue == 0x1f) // end packet
-                    // {
-                    //     videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
-                    //     videoCallBack(videoTarget, {.antenSignal = (int8_t)dataTmp[22], .signalQuality = (dataTmp[24] | (dataTmp[25] << 8))}, FramestreamID);
-                    //     // TODO: add a signal to notify data is ready
-                    //     // FIXME: Direct to wait next frame?
-                    //     videoTarget->vps.currentDataSize = 0;
-                    //     std::memset(videoTarget->videoDataRaw.get(), 0, videoTarget->videoRawSize);
-                    // }
-                    // else // continue packet
-                    // {
-                    //     if (!(Framesequeue == videoTarget->vps.currentFrameSeq + 1 ||
-                    //           (videoTarget->vps.currentFrameSeq == 0x1e && Framesequeue == 0x0)))
-                    //     {
-                    //         // Throw frame if lose
-                    //         // FIXME: should not throw
-                    //         // std::cout << "\033[32mdata cliching " << "\033[0m\n";
-                    //         // goto framereset;
-                    //     }
-                    //     videoTarget->vps.currentFrameSeq = Framesequeue;
-                    // }
                 }
                 else
                 {
@@ -404,15 +369,12 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                                       << (int)packetInfo.height << " "
                                       << CAST32(packetInfo.maxVideosize) << "\n";
                             // TODO: prepare data area for video data input
-                            VideoPackets videopacket = {
-                                .vps = {
-                                    packetInfo,
-                                    0,
-                                    0,
-                                    0,
-                                },
-                                .videoDataRaw = std::make_shared<uint8_t>(),
-                            };
+                            VideoPackets videopacket;
+                            videopacket.vps.info = packetInfo;
+                            videopacket.vps.currentDataSize = 0;
+                            videopacket.vps.currentFrameMark = 0;
+                            videopacket.vps.currentFrameSeq = 0;
+                            videopacket.vps.currentPacketSize = 0;
                             // FIXME: should set as a framebuffer?
                             videopacket.videoDataRaw.reset(new uint8_t[CAST32(packetInfo.maxVideosize)]);
                             //
