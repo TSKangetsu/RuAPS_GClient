@@ -70,6 +70,7 @@ int main(int argc, char const *argv[])
                 //=============================================================================//
                 std::cout << '\n';
                 std::cout << "\033[33mframeMark:" << data->vps.currentFrameMark << " frame packet count: " << data->vps.currentPacketSize << "\033[0m\n";
+                std::cout << "try to find data: ";
                 for (size_t i = 0; i < data->videoRawSize; i++)
                 {
                     if (datau.get()[i] == 0 && datau.get()[i + 1] == 0 &&
@@ -107,7 +108,7 @@ int main(int argc, char const *argv[])
                     {
                         errorFrameTmp->vps = data->vps;
                         std::memset(errorFrameTmp->videoDataRaw.get(), 0x00, data->vps.currentPacketSize * PacketPrePacks);
-                        std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + data->videoRawSize - 4, errorFrameTmp->videoDataRaw.get());
+                        std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + data->videoRawSize, errorFrameTmp->videoDataRaw.get());
                         errorFrameTmp->videoRawSize = data->videoRawSize;
                     }
                 }
@@ -130,20 +131,17 @@ int main(int argc, char const *argv[])
                 if (errorFrameTmp->vps.currentFrameMark == data->vps.currentFrameMark)
                 {
                     // ========================================================================================//
+                    unsigned int ErrNos[FEC_PACKET_MAX] = {0};
+                    unsigned int FecNos[FEC_PACKET_MAX] = {0};
+
                     FecPacket<FEC_DATA_MAX, FEC_PACKET_MAX, PacketPrePacks> fecPool;
                     FecPacket<FEC_DATA_MAX, FEC_PACKET_MAX, PacketPrePacks> dataPool;
-                    unsigned int FecNos[FEC_PACKET_MAX] = {0};
-                    unsigned int ErrNos[FEC_PACKET_MAX] = {0};
-
                     std::memset(fecPool.FecDataType_t.data1d, 0x00, FEC_DATA_MAX);
                     std::memset(dataPool.FecDataType_t.data1d, 0x00, FEC_DATA_MAX);
 
-                    int index = 0;
-                    int blocksizeIn = 0;
                     int datalast = -1;
-                    int errorSize = 0;
-                    // std::cout << "\033[34mRaw data ava check:";
-
+                    int errorCount = 0;
+                    int blocksizeIn = 0;
                     for (; !errorFrameTmp->vps.pakcetAvaliable.empty(); errorFrameTmp->vps.pakcetAvaliable.pop_front())
                     {
                         int blockset = std::get<0>(errorFrameTmp->vps.pakcetAvaliable.front());
@@ -159,108 +157,90 @@ int main(int argc, char const *argv[])
                         {
                             for (size_t i = 0; i < (blockset - datalast - 1); i++)
                             {
-                                ErrNos[index] = datalast + i + 1;
-                                index++;
+                                ErrNos[errorCount] = datalast + i + 1;
+                                errorCount++;
                             }
                         }
                         datalast = blockset;
-                        errorSize = index;
-                        // debug
-                        // std::cout << std::hex << (int)blockset << " ";
                     }
 
                     // ========================================================================================//
-                    // std::cout << "\033[0m\n";
                     // find final packet and fill errnos
                     int lastpackmiss = ((errorFrameTmp->vps.currentPacketSize - 1) - datalast);
-                    // std::cout << "last pack: " << lastpackmiss << "\n";
                     if (lastpackmiss > 0)
                     {
                         for (size_t i = 0; i < lastpackmiss; i++)
                         {
-                            ErrNos[index] = datalast + 1 + i;
-                            index++;
+                            ErrNos[errorCount] = datalast + 1 + i;
+                            errorCount++;
                         }
                     }
-
-                    std::cout << "\033[34mERROR BLOCK check:";
-                    for (size_t i = 0; i < index; i++)
+                    // FIXME: COPY dequeue to array, because pass deque raw data fec_decode not accept it.
+                    for (size_t i = 0; i < data->vps.pakcetAvaliable.size(); i++)
                     {
-                        std::cout << std::hex << (int)ErrNos[i] << " ";
+                        FecNos[i] = std::get<0>(data->vps.pakcetAvaliable.at(i));
                     }
-                    std::cout << "\033[0m\n";
                     // ========================================================================================//
-                    index = 0;
-                    // std::cout << "\033[34mFEC data ava check:";
-                    for (; !data->vps.pakcetAvaliable.empty(); data->vps.pakcetAvaliable.pop_front())
-                    {
-                        // std::cout << std::hex << (int)std::get<0>(data->vps.pakcetAvaliable.front()) << " ";
-                        FecNos[index] = std::get<0>(data->vps.pakcetAvaliable.front());
-                        index++;
-                    }
-                    // std::cout << std::dec << "\033[0m\n";
-
-                    std::cout << "\033[34mFEC BLOCK check:";
-                    for (size_t i = 0; i < index; i++)
-                    {
-                        std::cout << FecNos[i] << " ";
-                    }
-
-                    std::cout << "\033[0m\n";
                     std::copy((data->videoDataRaw.get()),
                               (data->videoDataRaw.get() + data->videoRawSize),
                               fecPool.FecDataType_t.data1d);
-
-                    // for (size_t i = 0; i < 12; i++)
-                    // {
-                    //     for (size_t k = 0; k < PacketPrePacks; k++)
-                    //     {
-                    //         std::cout << std::hex << (int)dataPool.FecDataType_t.data2d[i][k] << std::dec << " ";
-                    //     }
-                    //     std::cout << "===================\n";
-                    // }
-                    // std::cout << "\n";
-                    // std::cout << "\n";
-
-                    // for (size_t i = 0; i < 12; i++)
-                    // {
-                    //     for (size_t k = 0; k < PacketPrePacks; k++)
-                    //     {
-                    //         std::cout << std::hex << (int)fecPool.FecDataType_t.data2d[i][k] << std::dec << " ";
-                    //     }
-                    //     std::cout << "===================\n";
-                    // }
-                    // std::cout << "\n";
-                    // std::cout << "\n";
-
                     fec_decode(PacketPrePacks,
                                dataPool.dataout,
                                errorFrameTmp->vps.currentPacketSize,
                                fecPool.dataout,
                                FecNos, ErrNos,
-                               errorSize);
-
-                    // for (size_t i = 0; i < PacketPrePacks; i++)
-                    // {
-                    //     std::cout << std::hex << (int)dataPool.FecDataType_t.data2d[ErrNos[0]][i] << std::dec << " ";
-                    // }
-                    // std::cout << "\n";
-
-                    // for (size_t k = 0; k < 16384; k++)
-                    // {
-                    //     std::cout << std::hex << (int)dataPool.FecDataType_t.data1d[k] << std::dec << " ";
-                    // }
-                    // std::cout << "===================\n";
-
-                    uint32_t table[256];
-                    crc32::generate_table(table);
-                    uint32_t crc = crc32::update(table, 0, dataPool.FecDataType_t.data1d, 16384);
-                    std::cout << "check crc fix: " << std::hex << crc << std::hex << "\n";
-
-                    // std::shared_ptr<uint8_t> datau;
-                    // datau.reset(new uint8_t[data->videoRawSize]);
-                    // std::copy(dataPool.FecDataType_t.data1d, dataPool.FecDataType_t.data1d + , datau.get());
-                    // dataque.push(std::make_tuple(datau, errorFrameTmp->videoRawSize));
+                               errorCount);
+                    // ========================================================================================//
+                    // FIXME: should check crc?
+                    int crcGet = 0;
+                    uint32_t crc = 0;
+                    if (lastpackmiss <= 0)
+                    {
+                        // back search
+                        for (size_t i = errorFrameTmp->videoRawSize + (errorCount * PacketPrePacks); i > 0; i--)
+                        {
+                            if (dataPool.FecDataType_t.data1d[i] != 0)
+                            {
+                                crcGet = ((int)dataPool.FecDataType_t.data1d[i - 3]) |
+                                         ((int)dataPool.FecDataType_t.data1d[i - 2] << 8) |
+                                         ((int)dataPool.FecDataType_t.data1d[i - 1] << 16) |
+                                         ((int)dataPool.FecDataType_t.data1d[i] << 24);
+                                break;
+                            }
+                        }
+                        uint32_t table[256];
+                        crc32::generate_table(table);
+                        crc = crc32::update(table, 0, dataPool.FecDataType_t.data1d, errorFrameTmp->videoRawSize + (errorCount * PacketPrePacks) - 4);
+                    }
+                    // ERROR DEBUG
+                    {
+                        std::cout << "\033[34mFEC BLOCK check:";
+                        for (size_t i = 0; i < data->vps.pakcetAvaliable.size(); i++)
+                        {
+                            std::cout << FecNos[i] << " ";
+                        }
+                        std::cout << std::hex << "\nERR BLOCK CHECK :";
+                        for (size_t i = 0; i < errorCount; i++)
+                        {
+                            std::cout << (int64_t)ErrNos[i] << " ";
+                        }
+                        std::cout << "\033[0m\n"
+                                  << std::dec;
+                        std::cout << "check crc fix: " << std::hex << crc << " " << crcGet << std::dec << " size: " << errorFrameTmp->videoRawSize + (errorCount * PacketPrePacks) - 4;
+                        if (crc != crcGet)
+                            std::cout << "\033[31m data crc fix error \033[0m";
+                        else
+                            std::cout << "\033[32m data crc fix WELL \033[0m";
+                        std::cout << '\n';
+                    }
+                    // Pushing fixed data
+                    {
+                        std::shared_ptr<uint8_t> datau;
+                        int datasize = PacketPrePacks * errorFrameTmp->vps.currentPacketSize; // just using the max data packetsize, decode will handle it
+                        datau.reset(new uint8_t[datasize]);
+                        std::copy(dataPool.FecDataType_t.data1d, dataPool.FecDataType_t.data1d + datasize, datau.get());
+                        dataque.push(std::make_tuple(datau, datasize));
+                    }
                 }
             }
         });
@@ -280,8 +260,7 @@ int main(int argc, char const *argv[])
                     if (err < 0)
                     {
                         char otp[AV_ERROR_MAX_STRING_SIZE] = {0};
-                        // printf("%s \n", av_make_error_string(otp, AV_ERROR_MAX_STRING_SIZE, err));
-                        // parseerror++;
+                        std::cout << "\033[36mFFMPEG INFO:" << av_make_error_string(otp, AV_ERROR_MAX_STRING_SIZE, err) << "\033[0m\n";
                     }
                 }
                 // TODO: check header and found header to comfirm

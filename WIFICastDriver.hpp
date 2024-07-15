@@ -48,7 +48,7 @@ namespace WIFIBroadCast
         uint32_t currentDataSize;
         uint32_t currentFrameMark;
         uint32_t currentPacketSize;
-        std::deque<std::tuple<uint8_t, int>> pakcetAvaliable;
+        std::deque<std::tuple<unsigned int, int>> pakcetAvaliable;
     };
 
     struct VideoPackets
@@ -324,7 +324,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                         // Marking change means tranfer complete
                         if (FrameMarking == videoTarget->vps.currentFrameMark)
                             videoTarget->vps.pakcetAvaliable.push_back(
-                                std::tuple<uint8_t, int>{(videoTarget->vps.currentPacketSize - 1), (size - HeaderSize - 2)});
+                                std::tuple<unsigned int, int>{(videoTarget->vps.currentPacketSize - 1), (size - HeaderSize - 2)});
 
                         videoTarget->videoRawSize = videoTarget->vps.currentDataSize;
                         videoCallBack(videoTarget, {.antenSignal = (int8_t)dataTmp[22], .signalQuality = (dataTmp[24] | (dataTmp[25] << 8))}, FramestreamID);

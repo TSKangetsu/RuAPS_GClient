@@ -900,7 +900,7 @@ static inline void resolve(int blockSize,
 	for(col = 0; col < nr_fec_blocks; col++, ptr++)
 	    fprintf(stderr, "%d ", erased_blocks[col]);
 	fprintf(stderr, "\n");
-	assert(0);
+	// assert(0);
     }
 
     /* do the multiplication with the reduced code vector */
