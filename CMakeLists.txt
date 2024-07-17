@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.0.0)
 project(sinffer VERSION 0.1.0)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wstack-usage=1000")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wstack-usage=1000")
 
 add_definitions(-DMODULE_FFMPEG)
 find_path(AVCODEC_INCLUDE_DIR libavcodec/avcodec.h)
