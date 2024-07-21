@@ -2,13 +2,17 @@
 #include <iostream>
 #include "FFMPEGCodec.hpp"
 #include "Drive_Socket.hpp"
+#include "ThreadBuffer.hpp"
 #include "WIFICastDriver.hpp"
 #include <opencv4/opencv2/opencv.hpp>
 
 #include "crc32.h"
 #include "fec.hpp"
-#define FEC_PACKET_MAX 32
+#define FEC_PACKET_MAX 64
 #define FEC_DATA_MAX (FEC_PACKET_MAX * PacketPrePacks)
+
+#define FECDEBUG
+#define RECVDEBUG
 
 extern "C"
 {
@@ -28,18 +32,21 @@ int main(int argc, char const *argv[])
     uint64_t dataLose = 0;
     double dataLoseRate = 0;
 
+    int frameMarkLast = 0;
     bool dataisLose = false;
     std::deque<unsigned int> *packAVA;
-    std::queue<std::tuple<std::shared_ptr<uint8_t>, int>> dataque;
+    FrameBuffer<std::tuple<std::shared_ptr<uint8_t>, int>> dataque;
 
     char cmd[64];
+    sprintf(cmd, "ifconfig %s up", argv[1]);
+    system(cmd);
     sprintf(cmd, "iw dev %s set type monitor", argv[1]);
     system(cmd);
     sprintf(cmd, "iw dev %s set monitor fcsfail otherbss", argv[1]);
     system(cmd);
     sprintf(cmd, "iw dev %s set freq 5600 NOHT", argv[1]);
     system(cmd);
-    sprintf(cmd, "iw dev %s set txpower fixed 3000", argv[1]);
+    sprintf(cmd, "iw dev %s set txpower fixed 500", argv[1]);
     system(cmd);
 
     fec_init();
@@ -55,18 +62,25 @@ int main(int argc, char const *argv[])
     FFMPEGTools::FFMPEGDecodec decoder;
     cv::namedWindow("test", cv::WINDOW_NORMAL);
     cv::setWindowProperty("test", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
+    WIFIBroadCast::WirelessInfo info;
 
     test->WIFIRecvSinff(
         [&](WIFIBroadCast::VideoPackets *data, auto wirelssinfo, auto streamID)
         {
+            info = wirelssinfo;
             datarecive++;
             int start = GetTimeStamp();
-            if (streamID == 0) // RAW data here
+            if (streamID == 0 && data->videoRawSize < FEC_DATA_MAX) // RAW data here
             {
                 int datauSize = data->videoRawSize;
                 std::shared_ptr<uint8_t> datau;
                 datau.reset(new uint8_t[data->videoRawSize]);
                 std::copy(data->videoDataRaw.get(), data->videoDataRaw.get() + (datauSize - 4), datau.get());
+
+                if (!((frameMarkLast + 1 == data->vps.currentFrameMark) || ((int)data->vps.currentFrameMark == 0 && frameMarkLast == 7)))
+                    std::cout << "FrameMark lossing:" << frameMarkLast << " " << data->vps.currentFrameMark << "" << (int)((int)data->vps.currentFrameMark - frameMarkLast) << "\n";
+                frameMarkLast = data->vps.currentFrameMark;
+#ifdef RECVDEBUG
                 //=============================================================================//
                 std::cout << '\n';
                 std::cout << "\033[33mframeMark:" << data->vps.currentFrameMark << " frame packet count: " << data->vps.currentPacketSize << "\033[0m\n";
@@ -81,6 +95,7 @@ int main(int argc, char const *argv[])
                     }
                 }
                 std::cout << "\n";
+#endif
                 // FIXME: copy without ffsync id
                 int crcGet = ((int)data->videoDataRaw.get()[datauSize - 4]) |
                              ((int)data->videoDataRaw.get()[datauSize - 3] << 8) |
@@ -93,15 +108,20 @@ int main(int argc, char const *argv[])
                 uint32_t crc = crc32::update(table, 0, data->videoDataRaw.get(), datauSize - 4);
                 if (crc == crcGet)
                 {
+
+#ifdef RECVDEBUG
                     std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " \n";
-                    dataque.push(std::make_tuple(datau, data->videoRawSize));
+#endif
+                    dataque.pushFrame(std::make_tuple(datau, data->videoRawSize));
                     dataisLose = false;
                 }
                 else
                 {
                     dataLose++;
+#ifdef RECVDEBUG
                     std::cout << "check crc: " << std::hex << crc << "  " << crcGet << std::dec << "   " << datauSize << " ";
                     std::cout << "\033[31m data crc error \033[0m\n";
+#endif
                     // TODO: adding FEC wait flag next
                     dataisLose = true;
                     // SOME DATA MUST COPY BY SELF
@@ -119,12 +139,14 @@ int main(int argc, char const *argv[])
                     dataLose = dataLose / 10;
                 }
                 int end = GetTimeStamp();
+#ifdef RECVDEBUG
                 std::cout << "check time using:" << std::dec << end - start << "\n";
 
                 std::cout << "\033[32mdataLoseRate: " << (int)(((double)dataLose / (double)datarecive) * 100.f)
                           << " datasignal:" << wirelssinfo.antenSignal << " signalQ:" << wirelssinfo.signalQuality << "\033[0m\n";
+#endif
             }
-            else if (streamID == 1 && dataisLose)
+            else if (streamID == 1 && dataisLose && data->videoRawSize < FEC_DATA_MAX)
             {
                 // TODO: adding FEC decode fix data
                 // fec data is append after frame, just check framemarker
@@ -153,7 +175,7 @@ int main(int argc, char const *argv[])
                         blocksizeIn += blocksize;
 
                         // find err frame id
-                        if (datalast + 1 != blockset)
+                        if (datalast + 1 != blockset && (blockset - datalast - 1 > 0))
                         {
                             for (size_t i = 0; i < (blockset - datalast - 1); i++)
                             {
@@ -212,6 +234,7 @@ int main(int argc, char const *argv[])
                         crc32::generate_table(table);
                         crc = crc32::update(table, 0, dataPool.FecDataType_t.data1d, errorFrameTmp->videoRawSize + (errorCount * PacketPrePacks) - 4);
                     }
+#ifdef FECDEBUG
                     // ERROR DEBUG
                     {
                         std::cout << "\033[34mFEC BLOCK check:";
@@ -233,13 +256,15 @@ int main(int argc, char const *argv[])
                             std::cout << "\033[32m data crc fix WELL \033[0m";
                         std::cout << '\n';
                     }
+#endif
                     // Pushing fixed data
                     {
                         std::shared_ptr<uint8_t> datau;
                         int datasize = PacketPrePacks * errorFrameTmp->vps.currentPacketSize; // just using the max data packetsize, decode will handle it
                         datau.reset(new uint8_t[datasize]);
                         std::copy(dataPool.FecDataType_t.data1d, dataPool.FecDataType_t.data1d + datasize, datau.get());
-                        dataque.push(std::make_tuple(datau, datasize));
+                        if (crc == crcGet)
+                            dataque.pushFrame(std::make_tuple(datau, datasize));
                     }
                 }
             }
@@ -247,15 +272,17 @@ int main(int argc, char const *argv[])
 
     int IframePer = 0;
     int lastLose = 0;
+    int fstart = 0;
+    int fend = 0;
     FlowThread rest(
         [&]
         {
             if (dataque.size() > 0)
             {
-                for (; !dataque.empty(); dataque.pop())
+                for (; !dataque.empty(); dataque.getFrame())
                 {
                     char errmsg[2000];
-                    int err = decoder.FFMPEGDecodecInsert(std::get<std::shared_ptr<uint8_t>>(dataque.front()).get(), std::get<int>(dataque.front()));
+                    int err = decoder.FFMPEGDecodecInsert(std::get<std::shared_ptr<uint8_t>>(dataque.peekFrame()).get(), std::get<int>(dataque.peekFrame()));
 
                     if (err < 0)
                     {
@@ -267,13 +294,27 @@ int main(int argc, char const *argv[])
                 {
                     while (true)
                     {
+
                         FFMPEGTools::AVData data = decoder.FFMPEGDecodecGetFrame();
                         //
                         if (data.width != -1)
                         {
-                            cv::Mat matData(data.height, data.width, CV_8UC3, data.data);
+                            fstart = GetTimeStamp();
+                            cv::Mat matData = cv::Mat(data.height, data.width, CV_8UC3, data.data);
                             cv::flip(matData, matData, -1);
                             cv::resize(matData, matData, cv::Size(1024, 768));
+
+                            cv::putText(matData,
+                                        static_cast<std::ostringstream &&>(
+                                            (std::ostringstream() << "DL- :"
+                                                                  << std::dec
+                                                                  << (int)(((double)dataLose / (double)datarecive) * 100.f)
+                                                                  << "   AS- :"
+                                                                  << info.antenSignal
+                                                                  << "   SQ- :"
+                                                                  << info.signalQuality))
+                                            .str(),
+                                        cv::Point(50, 50), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0));
                             cv::imshow("test", matData);
                             cv::waitKey(1);
                         }
@@ -282,9 +323,10 @@ int main(int argc, char const *argv[])
                     }
                 }
             }
-        });
+        },
+        30.f);
 
-    sleep(-1);
-    // res.FlowWait();
+    // sleep(-1);
+    rest.FlowWait();
     return 0;
 }

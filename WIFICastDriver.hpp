@@ -213,9 +213,9 @@ int WIFIBroadCast::WIFICastDriver::WIFICastInject(uint8_t *data, int len, int In
             int size = ((PacketPrePacks) - (PacketSize * (PacketPrePacks)-len));
             //
             if (type == BroadCastType::VideoStream)
-                tmpData[((size + HeaderSize + 1))] = FrameQueueID << 5 | 0x1f;
+                tmpData[((size + HeaderSize + 1))] = FrameQueueID << 6 | 0x3f;
             if (type == BroadCastType::DataStream)
-                tmpData[((size + HeaderSize + 1))] = FrameQueueID << 5 | 0x1f;
+                tmpData[((size + HeaderSize + 1))] = FrameQueueID << 6 | 0x3f;
             // TODO: adding extra id frame locator
             tmpData[((size + HeaderSize))] = FrameMarking;
             //
@@ -231,9 +231,9 @@ int WIFIBroadCast::WIFICastDriver::WIFICastInject(uint8_t *data, int len, int In
         {
             // TODO: adding frame count up to 5bit, left 8 / 2 channel
             if (type == BroadCastType::VideoStream)
-                tmpData[(SocketMTU + 1)] = FrameQueueID << 5 | FrameCounter68;
+                tmpData[(SocketMTU + 1)] = FrameQueueID << 6 | FrameCounter68;
             if (type == BroadCastType::DataStream)
-                tmpData[(SocketMTU + 1)] = FrameQueueID << 5 | FrameCounter69;
+                tmpData[(SocketMTU + 1)] = FrameQueueID << 6 | FrameCounter69;
             // TODO: adding extra id frame locator
             tmpData[(SocketMTU)] = FrameMarking;
             //
@@ -248,13 +248,13 @@ int WIFIBroadCast::WIFICastDriver::WIFICastInject(uint8_t *data, int len, int In
         if (type == BroadCastType::VideoStream && PacketSize - 1 != i)
         {
             FrameCounter68++;
-            if (FrameCounter68 >= 0x1f)
+            if (FrameCounter68 >= 0x3f)
                 FrameCounter68 = 0x0;
         }
         else if (type == BroadCastType::DataStream && PacketSize - 1 != i)
         {
             FrameCounter69++;
-            if (FrameCounter69 >= 0x1f)
+            if (FrameCounter69 >= 0x3f)
                 FrameCounter69 = 0x0;
         }
     }
@@ -279,10 +279,10 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
             int size = dataTmp[FrameTypeL - 1];
             size |= dataTmp[FrameTypeL - 2] << 8;
             // FIXME: must deal with data team together
-            int FramestreamID = (dataTmp[size - 1] >> 5);
-            uint8_t Framesequeue = (dataTmp[size - 1] - (FramestreamID << 5));
-            int FrameMarking = dataTmp[size - 2] >> 5;
-            int framepacketsize = (dataTmp[size - 2] - (FrameMarking << 5));
+            int FramestreamID = (dataTmp[size - 1] >> 6);
+            uint8_t Framesequeue = (dataTmp[size - 1] - (FramestreamID << 6));
+            int FrameMarking = dataTmp[size - 2] >> 6;
+            int framepacketsize = (dataTmp[size - 2] - (FrameMarking << 6));
 
             // std::cout << FramestreamID << " " << Framesequeue << " " << FrameMarking << " " << framepacketsize << "\n";
 
@@ -307,7 +307,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                 errorrecover:
                     if (FrameMarking != videoTarget->vps.currentFrameMark)
                     {
-                        // it means frame losing or frame switched, check frame 0x1f
+                        // it means frame losing or frame switched, check frame 0x3f
                         if (videoTarget->vps.currentDataSize != 0)
                             goto framefinshed;
                         videoTarget->vps.currentFrameMark = FrameMarking;
@@ -318,7 +318,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                               videoTarget->videoDataRaw.get() + videoTarget->vps.currentDataSize);
                     videoTarget->vps.currentDataSize += (size - HeaderSize - 2);
 
-                    if (Framesequeue == 0x1f)
+                    if (Framesequeue == 0x3f)
                     {
                     framefinshed:
                         // Marking change means tranfer complete
@@ -333,7 +333,7 @@ void WIFIBroadCast::WIFICastDriver::WIFIRecvSinff(std::function<void(VideoPacket
                         videoTarget->vps.pakcetAvaliable.clear();
                         videoTarget->vps.currentDataSize = 0;
                         std::memset(videoTarget->videoDataRaw.get(), 0, videoTarget->videoRawSize);
-                        // no 0x1f ending losing packet, just goto deal with anther packet now, because data is dealed
+                        // no 0x3f ending losing packet, just goto deal with anther packet now, because data is dealed
                         if (FrameMarking != videoTarget->vps.currentFrameMark)
                             goto errorrecover;
                     }

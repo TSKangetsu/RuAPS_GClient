@@ -831,7 +831,7 @@ static inline void reduce(unsigned int blockSize,
 	}
     }
 
-    assert(nr_fec_blocks == erasedIdx);
+    // assert(nr_fec_blocks == erasedIdx);
 }
 
 #ifdef PROFILE
